@@ -133,9 +133,7 @@ class DICOMToPDFReceiver:
             logger.error(f"Error in finalize_pdf: {str(e)}", exc_info=True)
             
     def start_server(self, port=11112, address='0.0.0.0'):
-        """
-        Start the DICOM server to listen for incoming connections.
-        """
+
         try:
             self.ae = AE(ae_title=self.ae_title)
             
@@ -153,13 +151,13 @@ class DICOMToPDFReceiver:
             # Set up event handlers
             handlers = [(evt.EVT_C_STORE, self.handle_store)]
             
-            logger.info(f"DICOM C-STORE SCP Server starting on {address}:{port} with AE title {self.ae_title}")
+            logger.info(f"🏥 DICOM C-STORE SCP Server attivo sulla porta {port} con AE title {self.ae_title}")
             
             # Start server
-            self.ae.start_server((address, port), block=True, evt_handlers=handlers)
+            self.server = self.ae.start_server((address, port), block=True, evt_handlers=handlers)
             
         except Exception as e:
-            logger.error(f"Error starting DICOM server: {str(e)}", exc_info=True)
+            logger.error(f"Avvio DICOM server fallito: {str(e)}", exc_info=True)
             raise
             
     def shutdown(self):
@@ -184,6 +182,6 @@ class DICOMToPDFReceiver:
                 logger.error(f"Error finalizing PDF during shutdown: {str(e)}")
                 
         # Stop the server if it's running
-        if self.ae and self.ae.active_servers:
-            for server in self.ae.active_servers:
-                server.shutdown()
+        if hasattr(self, 'server') and self.server:
+            self.server.shutdown()
+            self.server = None  # Clear server reference
