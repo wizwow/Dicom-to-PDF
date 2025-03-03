@@ -4,6 +4,8 @@ import logging
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
+import gc
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,8 @@ GRID_SPACING = 10
 TOP_MARGIN = 770
 LINE_SPACING = 15
 METADATA_SPACE = 100  # Space for metadata on first page
+MAX_IMAGES_PER_PAGE = 12  # Maximum images per page for multi-frame
+BUFFER_SIZE = 10  # Number of images to process at once
 
 # Metadata fields to display
 METADATA_FIELDS = [
@@ -24,6 +28,14 @@ METADATA_FIELDS = [
     ("Modalità:", "Modality", "Sconosciuto"),
     ("Descrizione studio:", "StudyDescription", "Sconosciuto"),
 ]
+
+@contextmanager
+def memory_manager():
+    """Context manager for memory cleanup"""
+    try:
+        yield
+    finally:
+        gc.collect()
 
 def is_multiframe_dataset(dataset):
     """
@@ -57,95 +69,70 @@ def safe_get_attribute(dataset, attr, default=""):
         return str(default)
 
 def draw_metadata(pdf_canvas, dataset, y_position):
-    """
-    Draw patient metadata on the PDF.
-    
-    Args:
-        pdf_canvas: ReportLab canvas
-        dataset: DICOM dataset
-        y_position: Starting Y position
-        
-    Returns:
-        int: New Y position after drawing metadata
-    """
-    pdf_canvas.setFont("Helvetica-Bold", 12)
-    pdf_canvas.drawString(MARGIN, y_position, "Dati Paziente")
-    pdf_canvas.line(MARGIN, y_position - 5, MARGIN + 200, y_position - 5)
-    pdf_canvas.setFont("Helvetica", 10)
-    
-    y_pos = y_position - 20
-    
-    for label, attr, default in METADATA_FIELDS:
-        value = safe_get_attribute(dataset, attr, default)
-        if attr == "PatientName":
-            value = value.replace("^", " ")
-        pdf_canvas.drawString(MARGIN, y_pos, label)
-        pdf_canvas.drawString(MARGIN + 100, y_pos, value)
-        y_pos -= LINE_SPACING
-        
-    return y_pos
+    """Draw metadata section with memory optimization"""
+    with memory_manager():
+        for label, field, default in METADATA_FIELDS:
+            value = str(getattr(dataset, field, default))
+            pdf_canvas.drawString(MARGIN, y_position, f"{label} {value}")
+            y_position -= LINE_SPACING
+    return y_position
 
-def calculate_image_position(idx, img_size, rows, cols, first_page, metadata_space):
-    """
-    Calculate image position in the PDF.
-    
-    Args:
-        idx: Image index (0-based)
-        img_size: (width, height) of the image
-        rows, cols: Grid layout
-        first_page: Whether this is the first page
-        metadata_space: Space reserved for metadata
-        
-    Returns:
-        tuple: (x_pos, y_pos) for placing the image
-    """
-    img_width, img_height = img_size
-    images_per_page = rows * cols
-    
-    row = (idx % images_per_page) // cols
-    col = (idx % images_per_page) % cols
-    
-    x_pos = MARGIN + col * (img_width + GRID_SPACING)
-    
-    if first_page:
-        y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (img_height + GRID_SPACING) - metadata_space
+def calculate_layout(num_images):
+    """Calculate optimal layout based on number of images"""
+    if num_images <= 1:
+        return 1, 1
+    elif num_images <= 4:
+        return 2, 2
     else:
-        y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (img_height + GRID_SPACING)
-        
-    return x_pos, y_pos
+        return 4, 3  # Maximum grid size
 
-def scale_image(img, max_width, max_height):
-    """
-    Scale an image to fit within the given dimensions.
+def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params):
+    """Process a batch of images with memory optimization"""
+    rows, cols = layout_params["rows"], layout_params["cols"]
+    first_page = layout_params["first_page"]
+    max_width = layout_params["max_width"]
+    max_height = layout_params["max_height"]
     
-    Args:
-        img: PIL Image
-        max_width, max_height: Maximum dimensions
-        
-    Returns:
-        tuple: (new_width, new_height, scale_factor)
-    """
-    img_width, img_height = img.size
-    scale = min(max_width / img_width, max_height / img_height)
-    
-    new_width = int(img_width * scale)
-    new_height = int(img_height * scale)
-    
-    return new_width, new_height, scale
+    with memory_manager():
+        for i in range(start_idx, min(start_idx + batch_size, len(images))):
+            img = images[i]["image"]
+            
+            # Calculate position
+            page_idx = i // MAX_IMAGES_PER_PAGE
+            if page_idx > layout_params["current_page"]:
+                pdf_canvas.showPage()
+                layout_params["first_page"] = False
+                layout_params["current_page"] = page_idx
+                
+            # Scale image
+            img_width, img_height = img.size
+            scale = min(max_width / img_width, max_height / img_height)
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            
+            # Calculate position
+            pos_idx = i % MAX_IMAGES_PER_PAGE
+            row = pos_idx // cols
+            col = pos_idx % cols
+            
+            x_pos = MARGIN + col * (max_width + GRID_SPACING)
+            if first_page:
+                y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING) - METADATA_SPACE
+            else:
+                y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING)
+                
+            # Draw image
+            try:
+                pdf_canvas.drawInlineImage(img, x_pos, y_pos, width=new_width, height=new_height)
+            except Exception as e:
+                logger.error(f"Error drawing image {i}: {str(e)}")
+                
+            # Clear image from memory
+            del img
+            gc.collect()
 
 def generate_pdf(storage_dir, accession_number, images, filename_format):
-    """
-    Generate a PDF containing DICOM images.
-    
-    Args:
-        storage_dir: Directory to save the PDF
-        accession_number: Accession number of the study
-        images: List of dictionaries containing 'dataset' and 'image'
-        filename_format: Format string for the output filename
-        
-    Returns:
-        str: Path to the generated PDF or None if failed
-    """
+    """Generate a PDF with memory optimization"""
     if not images:
         logger.warning("No images provided for PDF generation")
         return None
@@ -153,11 +140,8 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
     try:
         dataset = images[0]["dataset"]
         
-        # Determine if it's a multi-frame DICOM
-        is_multiframe = is_multiframe_dataset(dataset)
-        
         # Create filename
-        patient_name = safe_get_attribute(dataset, "PatientName", "Unknown").replace("^", "_").replace(" ", "_")
+        patient_name = str(getattr(dataset, "PatientName", "Unknown")).replace("^", "_").replace(" ", "_")
         filename = filename_format.format(patient_name=patient_name, accession_number=accession_number)
         pdf_path = os.path.join(storage_dir, filename)
         
@@ -165,64 +149,31 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         pdf_canvas = canvas.Canvas(pdf_path, pagesize=letter)
         pdf_canvas.setFont("Helvetica", 10)
         
-        # Determine layout based on type
-        if is_multiframe:
-            rows, cols = 4, 3
-            images_per_page = rows * cols
-            
-            # Calculate maximum image size for grid
-            max_width = (PAGE_WIDTH - 2 * MARGIN - (cols - 1) * GRID_SPACING) / cols
-            max_height = (PAGE_HEIGHT - 2 * MARGIN - (rows - 1) * GRID_SPACING - METADATA_SPACE) / rows
-        else:
-            images_per_page = 1
-            max_width = PAGE_WIDTH - 2 * MARGIN
-            max_height = PAGE_HEIGHT - 2 * MARGIN - METADATA_SPACE
-            
-        # Track pagination
-        first_page = True
-        current_page = 0
-        
-        # Draw metadata on first page
+        # Draw metadata
         y_position = draw_metadata(pdf_canvas, dataset, TOP_MARGIN)
         
-        # Process each image
-        for idx, image_info in enumerate(images):
-            img = image_info["image"]
+        # Calculate layout
+        rows, cols = calculate_layout(len(images))
+        
+        # Calculate maximum image dimensions
+        max_width = (PAGE_WIDTH - 2 * MARGIN - (cols - 1) * GRID_SPACING) / cols
+        max_height = (PAGE_HEIGHT - 2 * MARGIN - (rows - 1) * GRID_SPACING - METADATA_SPACE) / rows
+        
+        # Layout parameters
+        layout_params = {
+            "rows": rows,
+            "cols": cols,
+            "first_page": True,
+            "current_page": 0,
+            "max_width": max_width,
+            "max_height": max_height
+        }
+        
+        # Process images in batches
+        for start_idx in range(0, len(images), BUFFER_SIZE):
+            process_image_batch(images, start_idx, BUFFER_SIZE, pdf_canvas, layout_params)
+            gc.collect()  # Force garbage collection between batches
             
-            # Start a new page when needed
-            page_idx = idx // images_per_page
-            if page_idx > current_page:
-                pdf_canvas.showPage()
-                first_page = False
-                current_page = page_idx
-                
-            # Scale the image
-            new_width, new_height, _ = scale_image(img, max_width, max_height)
-            
-            if is_multiframe:
-                # Grid layout
-                x_pos, y_pos = calculate_image_position(
-                    idx % images_per_page, 
-                    (new_width, new_height), 
-                    rows, cols, 
-                    first_page,
-                    METADATA_SPACE
-                )
-            else:
-                # Single image centered
-                x_pos = (PAGE_WIDTH - new_width) / 2
-                
-                if first_page:
-                    y_pos = (PAGE_HEIGHT - new_height - METADATA_SPACE) / 2
-                else:
-                    y_pos = (PAGE_HEIGHT - new_height) / 2
-                    
-            # Draw the image
-            try:
-                pdf_canvas.drawInlineImage(img, x_pos, y_pos, width=new_width, height=new_height)
-            except Exception as e:
-                logger.error(f"Error drawing image {idx}: {str(e)}")
-                
         # Save the PDF
         pdf_canvas.save()
         logger.info(f"PDF saved: {pdf_path}")
