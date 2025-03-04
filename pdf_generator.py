@@ -16,7 +16,8 @@ GRID_SPACING = 10
 TOP_MARGIN = 770
 LINE_SPACING = 15
 METADATA_SPACE = 100  # Space for metadata on first page
-MAX_IMAGES_PER_PAGE = 12  # Maximum images per page for multi-frame
+MAX_IMAGES_PER_PAGE_MULTIFRAME = 12  # Maximum images per page for multi-frame (4x3)
+MAX_IMAGES_PER_PAGE_SINGLEFRAME = 1  # Maximum images per page for single-frame
 BUFFER_SIZE = 10  # Number of images to process at once
 
 # Metadata fields to display
@@ -99,13 +100,14 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
     first_page = layout_params["first_page"]
     max_width = layout_params["max_width"]
     max_height = layout_params["max_height"]
+    max_images_per_page = layout_params["max_images_per_page"]
     
     with memory_manager():
         for i in range(start_idx, min(start_idx + batch_size, len(images))):
             img = images[i]["image"]
             
             # Calculate position
-            page_idx = i // MAX_IMAGES_PER_PAGE
+            page_idx = i // max_images_per_page
             if page_idx > layout_params["current_page"]:
                 pdf_canvas.showPage()
                 layout_params["first_page"] = False
@@ -118,7 +120,7 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             new_height = int(img_height * scale)
             
             # Calculate position
-            pos_idx = i % MAX_IMAGES_PER_PAGE
+            pos_idx = i % max_images_per_page
             row = pos_idx // cols
             col = pos_idx % cols
             
@@ -162,6 +164,9 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         # Calculate layout
         rows, cols = calculate_layout(len(images), dataset)
         
+        # Set max images per page based on whether it's multi-frame
+        max_images_per_page = MAX_IMAGES_PER_PAGE_MULTIFRAME if is_multiframe_dataset(dataset) else MAX_IMAGES_PER_PAGE_SINGLEFRAME
+        
         # Calculate maximum image dimensions
         max_width = (PAGE_WIDTH - 2 * MARGIN - (cols - 1) * GRID_SPACING) / cols
         max_height = (PAGE_HEIGHT - 2 * MARGIN - (rows - 1) * GRID_SPACING - METADATA_SPACE) / rows
@@ -173,7 +178,8 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
             "first_page": True,
             "current_page": 0,
             "max_width": max_width,
-            "max_height": max_height
+            "max_height": max_height,
+            "max_images_per_page": max_images_per_page
         }
         
         # Process images in batches
