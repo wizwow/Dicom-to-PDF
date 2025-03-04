@@ -90,7 +90,7 @@ def calculate_layout(num_images, dataset):
         tuple: (rows, cols) for the layout
     """
     if is_multiframe_dataset(dataset):
-        return 3, 4  # 4x3 grid for multi-frame
+        return 4, 3  # 4x3 grid for multi-frame
     else:
         return 1, 1  # 1x1 grid for single-frame
 
