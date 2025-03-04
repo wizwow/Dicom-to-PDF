@@ -77,14 +77,21 @@ def draw_metadata(pdf_canvas, dataset, y_position):
             y_position -= LINE_SPACING
     return y_position
 
-def calculate_layout(num_images):
-    """Calculate optimal layout based on number of images"""
-    if num_images <= 1:
-        return 1, 1
-    elif num_images <= 4:
-        return 2, 2
+def calculate_layout(num_images, dataset):
+    """
+    Calculate layout based on whether the dataset is multi-frame or single-frame.
+    
+    Args:
+        num_images: Number of images to display
+        dataset: DICOM dataset to check for multi-frame
+        
+    Returns:
+        tuple: (rows, cols) for the layout
+    """
+    if is_multiframe_dataset(dataset):
+        return 3, 4  # 4x3 grid for multi-frame
     else:
-        return 4, 3  # Maximum grid size
+        return 1, 1  # 1x1 grid for single-frame
 
 def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params):
     """Process a batch of images with memory optimization"""
@@ -153,7 +160,7 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         y_position = draw_metadata(pdf_canvas, dataset, TOP_MARGIN)
         
         # Calculate layout
-        rows, cols = calculate_layout(len(images))
+        rows, cols = calculate_layout(len(images), dataset)
         
         # Calculate maximum image dimensions
         max_width = (PAGE_WIDTH - 2 * MARGIN - (cols - 1) * GRID_SPACING) / cols
