@@ -109,6 +109,7 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             # Calculate position
             page_idx = i // max_images_per_page
             if page_idx > layout_params["current_page"]:
+                logger.info(f"Creating new page {page_idx + 1}")
                 pdf_canvas.showPage()
                 layout_params["first_page"] = False
                 layout_params["current_page"] = page_idx
@@ -118,6 +119,7 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             scale = min(max_width / img_width, max_height / img_height)
             new_width = int(img_width * scale)
             new_height = int(img_height * scale)
+            logger.debug(f"Image {i + 1}: Original size {img_width}x{img_height}, Scaled to {new_width}x{new_height}")
             
             # Calculate position
             if rows == 1 and cols == 1:  # Single frame case
@@ -126,23 +128,26 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 y_pos = (PAGE_HEIGHT - new_height) / 2
                 if first_page:
                     y_pos -= METADATA_SPACE / 2  # Adjust for metadata space on first page
+                logger.debug(f"Single frame image {i + 1}: Centered at position ({x_pos}, {y_pos})")
             else:  # Multi-frame case
-                # Calculate position in grid
-                pos_idx = i % max_images_per_page
-                row = pos_idx // cols
-                col = pos_idx % cols
+                # Calculate position in grid for current page
+                current_page_pos = i % max_images_per_page
+                row = current_page_pos // cols
+                col = current_page_pos % cols
                 
                 x_pos = MARGIN + col * (max_width + GRID_SPACING)
-                if first_page:
+                if first_page and page_idx == 0:
                     y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING) - METADATA_SPACE
                 else:
                     y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING)
+                logger.debug(f"Multi-frame image {i + 1}: Grid position ({row}, {col}) at ({x_pos}, {y_pos})")
                 
             # Draw image
             try:
                 pdf_canvas.drawInlineImage(img, x_pos, y_pos, width=new_width, height=new_height)
+                logger.debug(f"Successfully drew image {i + 1} on page {page_idx + 1}")
             except Exception as e:
-                logger.error(f"Error drawing image {i}: {str(e)}")
+                logger.error(f"Error drawing image {i + 1} on page {page_idx + 1}: {str(e)}")
                 
             # Clear image from memory
             del img
@@ -156,11 +161,14 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         
     try:
         dataset = images[0]["dataset"]
+        logger.info(f"Starting PDF generation for patient: {getattr(dataset, 'PatientName', 'Unknown')}")
+        logger.info(f"Total images to process: {len(images)}")
         
         # Create filename
         patient_name = str(getattr(dataset, "PatientName", "Unknown")).replace("^", "_").replace(" ", "_")
         filename = filename_format.format(patient_name=patient_name, accession_number=accession_number)
         pdf_path = os.path.join(storage_dir, filename)
+        logger.info(f"PDF will be saved as: {pdf_path}")
         
         # Create PDF canvas
         pdf_canvas = canvas.Canvas(pdf_path, pagesize=letter)
@@ -168,16 +176,22 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         
         # Draw metadata
         y_position = draw_metadata(pdf_canvas, dataset, TOP_MARGIN)
+        logger.debug("Metadata section drawn successfully")
         
         # Calculate layout
         rows, cols = calculate_layout(len(images), dataset)
+        is_multiframe = is_multiframe_dataset(dataset)
+        logger.info(f"Layout configuration: {'Multi-frame' if is_multiframe else 'Single-frame'} mode")
+        logger.info(f"Grid layout: {rows}x{cols}")
         
         # Set max images per page based on whether it's multi-frame
-        max_images_per_page = MAX_IMAGES_PER_PAGE_MULTIFRAME if is_multiframe_dataset(dataset) else MAX_IMAGES_PER_PAGE_SINGLEFRAME
+        max_images_per_page = MAX_IMAGES_PER_PAGE_MULTIFRAME if is_multiframe else MAX_IMAGES_PER_PAGE_SINGLEFRAME
+        logger.info(f"Maximum images per page: {max_images_per_page}")
         
         # Calculate maximum image dimensions
         max_width = (PAGE_WIDTH - 2 * MARGIN - (cols - 1) * GRID_SPACING) / cols
         max_height = (PAGE_HEIGHT - 2 * MARGIN - (rows - 1) * GRID_SPACING - METADATA_SPACE) / rows
+        logger.debug(f"Maximum image dimensions: {max_width}x{max_height}")
         
         # Layout parameters
         layout_params = {
@@ -191,13 +205,17 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         }
         
         # Process images in batches
-        for start_idx in range(0, len(images), BUFFER_SIZE):
+        total_batches = (len(images) + BUFFER_SIZE - 1) // BUFFER_SIZE
+        logger.info(f"Processing {len(images)} images in {total_batches} batches")
+        
+        for batch_idx, start_idx in enumerate(range(0, len(images), BUFFER_SIZE), 1):
+            logger.info(f"Processing batch {batch_idx}/{total_batches} (images {start_idx + 1}-{min(start_idx + BUFFER_SIZE, len(images))})")
             process_image_batch(images, start_idx, BUFFER_SIZE, pdf_canvas, layout_params)
             gc.collect()  # Force garbage collection between batches
             
         # Save the PDF
         pdf_canvas.save()
-        logger.info(f"PDF saved: {pdf_path}")
+        logger.info(f"PDF successfully generated and saved: {pdf_path}")
         return pdf_path
         
     except Exception as e:
