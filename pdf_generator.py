@@ -78,12 +78,11 @@ def draw_metadata(pdf_canvas, dataset, y_position):
             y_position -= LINE_SPACING
     return y_position
 
-def calculate_layout(num_images, dataset):
+def calculate_layout(dataset):
     """
     Calculate layout based on whether the dataset is multi-frame or single-frame.
     
     Args:
-        num_images: Number of images to display
         dataset: DICOM dataset to check for multi-frame
         
     Returns:
@@ -96,39 +95,59 @@ def calculate_layout(num_images, dataset):
 
 def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params):
     """Process a batch of images with memory optimization"""
-    rows, cols = layout_params["rows"], layout_params["cols"]
-    first_page = layout_params["first_page"]
     max_width = layout_params["max_width"]
     max_height = layout_params["max_height"]
-    max_images_per_page = layout_params["max_images_per_page"]
+    first_page = layout_params["first_page"]
+    current_page = layout_params["current_page"]
     
     with memory_manager():
         for i in range(start_idx, min(start_idx + batch_size, len(images))):
             img = images[i]["image"]
+            dataset = images[i]["dataset"]
+            
+            # Calculate layout for this specific image
+            rows, cols = calculate_layout(dataset)
+            max_images_per_page = MAX_IMAGES_PER_PAGE_MULTIFRAME if is_multiframe_dataset(dataset) else MAX_IMAGES_PER_PAGE_SINGLEFRAME
             
             # Calculate position
-            page_idx = i // max_images_per_page
-            if page_idx > layout_params["current_page"]:
-                pdf_canvas.showPage()
-                layout_params["first_page"] = False
-                layout_params["current_page"] = page_idx
-                
-            # Scale image
-            img_width, img_height = img.size
-            scale = min(max_width / img_width, max_height / img_height)
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-            
-            # Calculate position
+            page_idx = current_page
             if rows == 1 and cols == 1:  # Single frame case
+                # Each single frame image gets its own page
+                if i > start_idx or not first_page:
+                    pdf_canvas.showPage()
+                    layout_params["first_page"] = False
+                current_page += 1
+                layout_params["current_page"] = current_page
+                
+                # Scale image
+                img_width, img_height = img.size
+                scale = min(max_width / img_width, max_height / img_height)
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                
                 # Center the image on the page
                 x_pos = (PAGE_WIDTH - new_width) / 2
                 y_pos = (PAGE_HEIGHT - new_height) / 2
                 if first_page and page_idx == 0:
                     y_pos -= METADATA_SPACE / 2  # Adjust for metadata space on first page
+                    
             else:  # Multi-frame case
-                # Calculate position in grid - use position relative to current page
-                pos_on_current_page = i - (page_idx * max_images_per_page)
+                # Check if we need a new page
+                pos_on_current_page = layout_params.get("multi_frame_count", 0)
+                if pos_on_current_page >= MAX_IMAGES_PER_PAGE_MULTIFRAME:
+                    pdf_canvas.showPage()
+                    layout_params["first_page"] = False
+                    current_page += 1
+                    layout_params["current_page"] = current_page
+                    pos_on_current_page = 0
+                
+                # Scale image
+                img_width, img_height = img.size
+                scale = min(max_width / img_width, max_height / img_height)
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                
+                # Calculate position in grid
                 row = pos_on_current_page // cols
                 col = pos_on_current_page % cols
                 
@@ -138,6 +157,9 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 else:
                     y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING)
                 
+                # Update multi-frame counter
+                layout_params["multi_frame_count"] = pos_on_current_page + 1
+            
             # Draw image
             try:
                 pdf_canvas.drawInlineImage(img, x_pos, y_pos, width=new_width, height=new_height)
@@ -169,25 +191,17 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         # Draw metadata
         y_position = draw_metadata(pdf_canvas, dataset, TOP_MARGIN)
         
-        # Calculate layout
-        rows, cols = calculate_layout(len(images), dataset)
-        
-        # Set max images per page based on whether it's multi-frame
-        max_images_per_page = MAX_IMAGES_PER_PAGE_MULTIFRAME if is_multiframe_dataset(dataset) else MAX_IMAGES_PER_PAGE_SINGLEFRAME
-        
-        # Calculate maximum image dimensions
-        max_width = (PAGE_WIDTH - 2 * MARGIN - (cols - 1) * GRID_SPACING) / cols
-        max_height = (PAGE_HEIGHT - 2 * MARGIN - (rows - 1) * GRID_SPACING - METADATA_SPACE) / rows
+        # Calculate maximum image dimensions (use single frame dimensions as default)
+        max_width = PAGE_WIDTH - 2 * MARGIN
+        max_height = PAGE_HEIGHT - 2 * MARGIN - METADATA_SPACE
         
         # Layout parameters
         layout_params = {
-            "rows": rows,
-            "cols": cols,
             "first_page": True,
             "current_page": 0,
             "max_width": max_width,
             "max_height": max_height,
-            "max_images_per_page": max_images_per_page
+            "multi_frame_count": 0  # Counter for multi-frame images on current page
         }
         
         # Process images in batches
