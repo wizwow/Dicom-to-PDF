@@ -124,16 +124,16 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 # Center the image on the page
                 x_pos = (PAGE_WIDTH - new_width) / 2
                 y_pos = (PAGE_HEIGHT - new_height) / 2
-                if first_page:
+                if first_page and page_idx == 0:
                     y_pos -= METADATA_SPACE / 2  # Adjust for metadata space on first page
             else:  # Multi-frame case
-                # Calculate position in grid
-                pos_idx = i % max_images_per_page
-                row = pos_idx // cols
-                col = pos_idx % cols
+                # Calculate position in grid - use position relative to current page
+                pos_on_current_page = i - (page_idx * max_images_per_page)
+                row = pos_on_current_page // cols
+                col = pos_on_current_page % cols
                 
                 x_pos = MARGIN + col * (max_width + GRID_SPACING)
-                if first_page:
+                if first_page and page_idx == 0:
                     y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING) - METADATA_SPACE
                 else:
                     y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (max_height + GRID_SPACING)
