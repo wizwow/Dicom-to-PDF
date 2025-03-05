@@ -93,6 +93,13 @@ def calculate_layout(dataset):
     else:
         return 1, 1  # 1x1 grid for single-frame
 
+def draw_page_number(pdf_canvas, page_num):
+    """Draw page number at the bottom center of the page"""
+    text = f"Pagina {page_num}"
+    text_width = pdf_canvas.stringWidth(text, "Helvetica", 10)
+    x = (PAGE_WIDTH - text_width) / 2
+    pdf_canvas.drawString(x, MARGIN / 2, text)
+
 def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params):
     """Process a batch of images with memory optimization"""
     max_width = layout_params["max_width"]
@@ -114,6 +121,8 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             # Check if we're switching between single and multi-frame
             current_image_type = "multi" if is_multiframe else "single"
             if last_image_type is not None and current_image_type != last_image_type:
+                # Add page number before creating new page
+                draw_page_number(pdf_canvas, current_page + 1)
                 # Start a new page when switching image types
                 pdf_canvas.showPage()
                 layout_params["first_page"] = False
@@ -129,6 +138,8 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             if rows == 1 and cols == 1:  # Single frame case
                 # Each single frame image gets its own page
                 if i > start_idx or not first_page:
+                    # Add page number before creating new page
+                    draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
                 current_page += 1
@@ -154,6 +165,8 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 # Check if we need a new page
                 pos_on_current_page = layout_params.get("multi_frame_count", 0)
                 if pos_on_current_page >= MAX_IMAGES_PER_PAGE_MULTIFRAME:
+                    # Add page number before creating new page
+                    draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
                     current_page += 1
@@ -232,6 +245,9 @@ def generate_pdf(storage_dir, accession_number, images, filename_format):
         for start_idx in range(0, len(images), BUFFER_SIZE):
             process_image_batch(images, start_idx, BUFFER_SIZE, pdf_canvas, layout_params)
             gc.collect()  # Force garbage collection between batches
+            
+        # Add page number to the last page
+        draw_page_number(pdf_canvas, layout_params["current_page"] + 1)
             
         # Save the PDF
         pdf_canvas.save()
