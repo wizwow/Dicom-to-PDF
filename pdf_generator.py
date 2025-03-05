@@ -106,7 +106,7 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
     max_height = layout_params["max_height"]
     first_page = layout_params["first_page"]
     current_page = layout_params["current_page"]
-    last_image_type = layout_params.get("last_image_type", None)  # Track the type of the last image processed
+    last_image_type = layout_params.get("last_image_type", None)
     
     with memory_manager():
         for i in range(start_idx, min(start_idx + batch_size, len(images))):
@@ -116,29 +116,28 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             # Calculate layout for this specific image
             rows, cols = calculate_layout(dataset)
             is_multiframe = is_multiframe_dataset(dataset)
-            max_images_per_page = MAX_IMAGES_PER_PAGE_MULTIFRAME if is_multiframe else MAX_IMAGES_PER_PAGE_SINGLEFRAME
-            
-            # Check if we're switching between single and multi-frame
             current_image_type = "multi" if is_multiframe else "single"
-            if last_image_type is not None and current_image_type != last_image_type:
-                # Add page number before creating new page
-                draw_page_number(pdf_canvas, current_page + 1)
-                # Start a new page when switching image types
-                pdf_canvas.showPage()
-                layout_params["first_page"] = False
-                current_page += 1
-                layout_params["current_page"] = current_page
-                layout_params["multi_frame_count"] = 0  # Reset counter when switching types
+            
+            # Handle page transitions
+            if last_image_type is not None:
+                if current_image_type != last_image_type:
+                    # If switching from multi to single or vice versa, always start a new page
+                    if i > start_idx or not first_page:
+                        draw_page_number(pdf_canvas, current_page + 1)
+                        pdf_canvas.showPage()
+                        layout_params["first_page"] = False
+                        current_page += 1
+                        layout_params["current_page"] = current_page
+                        layout_params["multi_frame_count"] = 0
             
             # Update last image type
             layout_params["last_image_type"] = current_image_type
             
             # Calculate position
             page_idx = current_page
-            if rows == 1 and cols == 1:  # Single frame case
+            if current_image_type == "single":  # Single frame case
                 # Each single frame image gets its own page
                 if i > start_idx or not first_page:
-                    # Add page number before creating new page
                     draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
@@ -159,13 +158,12 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 x_pos = (PAGE_WIDTH - new_width) / 2
                 y_pos = (PAGE_HEIGHT - new_height) / 2
                 if first_page and page_idx == 0:
-                    y_pos -= METADATA_SPACE / 2  # Adjust for metadata space on first page
+                    y_pos -= METADATA_SPACE / 2
                     
             else:  # Multi-frame case
                 # Check if we need a new page
                 pos_on_current_page = layout_params.get("multi_frame_count", 0)
                 if pos_on_current_page >= MAX_IMAGES_PER_PAGE_MULTIFRAME:
-                    # Add page number before creating new page
                     draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
