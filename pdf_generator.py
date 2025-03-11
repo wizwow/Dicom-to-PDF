@@ -118,9 +118,8 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             is_multiframe = is_multiframe_dataset(dataset)
             current_image_type = "multi" if is_multiframe else "single"
             
-            # Handle page transitions
+            # Force new page if switching between single and multi-frame
             if last_image_type is not None and current_image_type != last_image_type:
-                # Always start a new page when switching between single and multi-frame
                 draw_page_number(pdf_canvas, current_page + 1)
                 pdf_canvas.showPage()
                 layout_params["first_page"] = False
@@ -139,8 +138,8 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                     draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
-                current_page += 1
-                layout_params["current_page"] = current_page
+                    current_page += 1
+                    layout_params["current_page"] = current_page
                 
                 # Use full page dimensions for single frame
                 available_width = PAGE_WIDTH - 2 * MARGIN
