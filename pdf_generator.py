@@ -7,6 +7,16 @@ from reportlab.lib.units import inch
 import gc
 from contextlib import contextmanager
 
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Output to console
+        logging.FileHandler('pdf_generator.log')  # Output to file
+    ]
+)
+
 logger = logging.getLogger(__name__)
 
 # Layout constants
@@ -118,8 +128,12 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             is_multiframe = is_multiframe_dataset(dataset)
             current_image_type = "multi" if is_multiframe else "single"
             
+            logger.debug(f"Processing image {i + 1}: Type={current_image_type}, Current page={current_page + 1}, Last type={last_image_type}")
+            
             # Force new page if switching between single and multi-frame
             if last_image_type is not None and current_image_type != last_image_type:
+                logger.debug(f"Image type transition detected: {last_image_type} -> {current_image_type}")
+                logger.debug(f"Creating new page {current_page + 2} for type transition")
                 draw_page_number(pdf_canvas, current_page + 1)
                 pdf_canvas.showPage()
                 layout_params["first_page"] = False
@@ -133,8 +147,10 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
             # Calculate position
             page_idx = current_page
             if current_image_type == "single":  # Single frame case
+                logger.debug(f"Processing single-frame image {i + 1} on page {current_page + 1}")
                 # Each single frame image gets its own page
                 if i > start_idx or not first_page:
+                    logger.debug(f"Creating new page {current_page + 2} for single-frame image")
                     draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
@@ -150,17 +166,22 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 scale = min(available_width / img_width, available_height / img_height)
                 new_width = int(img_width * scale)
                 new_height = int(img_height * scale)
+                logger.debug(f"Single-frame image dimensions: Original={img_width}x{img_height}, Scaled={new_width}x{new_height}")
                 
                 # Center the image on the page
                 x_pos = (PAGE_WIDTH - new_width) / 2
                 y_pos = (PAGE_HEIGHT - new_height) / 2
                 if first_page and page_idx == 0:
                     y_pos -= METADATA_SPACE / 2
+                logger.debug(f"Single-frame image position: ({x_pos}, {y_pos})")
                     
             else:  # Multi-frame case
                 # Check if we need a new page
                 pos_on_current_page = layout_params.get("multi_frame_count", 0)
+                logger.debug(f"Multi-frame image {i + 1}: Position on current page={pos_on_current_page + 1}/{MAX_IMAGES_PER_PAGE_MULTIFRAME}")
+                
                 if pos_on_current_page >= MAX_IMAGES_PER_PAGE_MULTIFRAME:
+                    logger.debug(f"Creating new page {current_page + 2} for multi-frame images")
                     draw_page_number(pdf_canvas, current_page + 1)
                     pdf_canvas.showPage()
                     layout_params["first_page"] = False
@@ -181,6 +202,7 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 scale = min(available_width / img_width, available_height / img_height)
                 new_width = int(img_width * scale)
                 new_height = int(img_height * scale)
+                logger.debug(f"Multi-frame image dimensions: Original={img_width}x{img_height}, Scaled={new_width}x{new_height}")
                 
                 # Calculate position in grid
                 row = pos_on_current_page // cols
@@ -192,12 +214,15 @@ def process_image_batch(images, start_idx, batch_size, pdf_canvas, layout_params
                 else:
                     y_pos = PAGE_HEIGHT - MARGIN - (row + 1) * (available_height + GRID_SPACING)
                 
+                logger.debug(f"Multi-frame image position: Grid=({row}, {col}), Coords=({x_pos}, {y_pos})")
+                
                 # Update multi-frame counter
                 layout_params["multi_frame_count"] = pos_on_current_page + 1
             
             # Draw image
             try:
                 pdf_canvas.drawInlineImage(img, x_pos, y_pos, width=new_width, height=new_height)
+                logger.debug(f"Successfully drew image {i + 1} on page {current_page + 1}")
             except Exception as e:
                 logger.error(f"Error drawing image {i}: {str(e)}")
                 
